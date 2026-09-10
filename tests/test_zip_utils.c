@@ -1,7 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../src/zip_utils.h"
+
+#include "scrambler/zip_utils.h"
 
 /*
  * Bilerek assert() KULLANMIYORUZ: bu proje varsayilan olarak Release
@@ -62,13 +63,19 @@ static int files_fully_equal(const char *a, const char *b) {
     return equal;
 }
 
+static void remove_if_set(const char *path) {
+    if (path && path[0]) remove(path);
+}
+
 /* Bir zip dosyasi olusturur, bozar (scramble), sonra bozulani tekrar
  * araca vererek geri getirir (restore); orijinalle birebir ayni
  * cikip cikmadigini ve dosya boyutunun hic degismedigini dogrular. */
 static void run_roundtrip_case(const char *label, const unsigned char *payload,
                                 size_t payload_len) {
-    char original[512], scrambled[512], restored[512];
-    snprintf(original, sizeof(original), "/tmp/rt_%s_original.zip", label);
+    char original[512] = {0};
+    char scrambled[512] = {0};
+    char restored[512] = {0};
+    snprintf(original, sizeof(original), "test_%s_original.zip", label);
 
     unsigned char full[4 + 512];
     size_t total_len = 4 + payload_len;
@@ -106,18 +113,72 @@ static void run_roundtrip_case(const char *label, const unsigned char *payload,
           "geri getirilen dosya, orijinalle bayt bayt ayni olmali");
     CHECK(file_size(scrambled) == (long)total_len,
           "bozulmus (ara) dosya restore sirasinda degismemis olmali");
+
+    remove_if_set(original);
+    remove_if_set(scrambled);
+    remove_if_set(restored);
+}
+
+static void test_zip_signatures(void) {
+    static const unsigned char signatures[][4] = {
+        {0x50, 0x4B, 0x03, 0x04},
+        {0x50, 0x4B, 0x05, 0x06},
+        {0x50, 0x4B, 0x07, 0x08}
+    };
+    const char *path = "test_signature.zip";
+
+    for (size_t i = 0; i < sizeof(signatures) / sizeof(signatures[0]); i++) {
+        CHECK(write_file(path, signatures[i], sizeof(signatures[i])),
+              "imza test dosyasi yazilabilmeli");
+        CHECK(is_zip_file(path) == 1, "gecerli ZIP imzasi taninmali");
+    }
+    remove_if_set(path);
+}
+
+static void test_small_output_buffer(void) {
+    const char *path = "test_small_buffer.zip";
+    char output_path[5] = "eski";
+
+    CHECK(write_file(path, ZIP_SIGNATURE, sizeof(ZIP_SIGNATURE)),
+          "kucuk tampon test dosyasi yazilabilmeli");
+    CHECK(process_dropped_file(path, output_path, sizeof(output_path)) == -1,
+          "yetersiz cikti yolu tamponu hata dondurmeli");
+    CHECK(output_path[0] == '\0', "hata halinde cikti yolu bos olmali");
+    CHECK(is_zip_file(path) == 1,
+          "yetersiz tampon orijinal dosyayi degistirmemeli");
+    remove_if_set(path);
+}
+
+static void test_same_input_and_output_buffer(void) {
+    char path[64] = "test_same_buffer.zip";
+
+    CHECK(write_file(path, ZIP_SIGNATURE, sizeof(ZIP_SIGNATURE)),
+          "ayni tampon test dosyasi yazilabilmeli");
+    CHECK(process_dropped_file(path, path, sizeof(path)) == -1,
+          "girdi ve cikti yolu ayni tamponu kullanamamali");
+    CHECK(strcmp(path, "test_same_buffer.zip") == 0,
+          "hata halinde girdi yolu tampondaki degerini korumali");
+    CHECK(is_zip_file(path) == 1,
+          "ayni tampon hatasi orijinal dosyayi degistirmemeli");
+    remove_if_set(path);
 }
 
 int main(void) {
     /* Var olmayan / zip olmayan dosyalarda temel davranis */
-    CHECK(is_zip_file("/tmp/olmayan_dosya_xyz_demo") == 0,
+    CHECK(is_zip_file(NULL) == 0, "NULL yol zip sayilmamali");
+    CHECK(is_zip_file("olmayan_dosya_xyz_demo") == 0,
           "var olmayan dosya zip sayilmamali");
 
     unsigned char not_zip_payload[] = {'H', 'E', 'L', 'L', 'O'};
-    write_file("/tmp/rt_notzip.bin", not_zip_payload,
+    write_file("test_notzip.bin", not_zip_payload,
                sizeof(not_zip_payload));
-    CHECK(is_zip_file("/tmp/rt_notzip.bin") == 0,
+    CHECK(is_zip_file("test_notzip.bin") == 0,
           "PK imzasiyla baslamayan dosya zip sayilmamali");
+    remove_if_set("test_notzip.bin");
+
+    test_zip_signatures();
+    test_small_output_buffer();
+    test_same_input_and_output_buffer();
 
     /* Ana senaryo: kucuk, orta ve "zorlayici" bit desenli veriyle
      * tam gidis-donus (round-trip) testi. */

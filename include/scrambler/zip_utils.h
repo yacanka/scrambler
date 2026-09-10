@@ -1,5 +1,5 @@
-#ifndef ZIP_UTILS_H
-#define ZIP_UTILS_H
+#ifndef SCRAMBLER_ZIP_UTILS_H
+#define SCRAMBLER_ZIP_UTILS_H
 
 #include <stddef.h>
 
@@ -7,7 +7,8 @@
 extern const unsigned char ZIP_SIGNATURE[4];
 
 /*
- * Dosyanin ilk 4 baytini standart ZIP imzasiyla karsilastirir.
+ * Dosyanin ilk 4 baytini bilinen ZIP imzalariyla karsilastirir.
+ * Normal, bos ve bolunmus (spanned) ZIP arsivleri desteklenir.
  * Dosya acilamiyorsa veya 4 bayttan kisaysa 0 (zip degil) doner.
  */
 int is_zip_file(const char *filepath);
@@ -34,11 +35,12 @@ int is_zip_file(const char *filepath);
  *
  * Orijinal dosyaya asla yazilmaz. output_path / output_path_size,
  * uretilen yeni dosyanin tam yolunu almak icin kullanicinin sagladigi
- * tampondur.
+ * tampondur ve input_path'ten ayri olmalidir. Tampon yol icin yetersizse
+ * islem yapilmaz ve hata doner.
  *
  * Donus: basarili olursa 0, hata olursa -1.
  */
 int process_dropped_file(const char *input_path, char *output_path,
                           size_t output_path_size);
 
-#endif /* ZIP_UTILS_H */
+#endif /* SCRAMBLER_ZIP_UTILS_H */

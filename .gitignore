@@ -1,0 +1,10 @@
+/build/
+/build-*/
+.DS_Store
+*.o
+*.a
+*.exe
+/zip_header_tool
+/test_zip_utils
+/test_*.bin
+/test_*.zip
