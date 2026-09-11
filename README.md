@@ -20,7 +20,8 @@ Orijinal dosya degistirilmez ve cikti boyutu girdi boyutuyla ayni kalir.
 - Basari/hata durumunu gosteren, yumusakca kaybolan bildirim
 - Son bes islemi gosteren gecmis paneli ve `Temizle` butonu
 - Uzun dosya adlari icin guvenli kisaltma
-- Windows'ta executable uzerine birakilan dosyalari acilista isleme
+- Windows'ta executable uzerine birakilan dosyalari acilista isleyip
+  otomatik kapanma
 - Sistem fontu bulunamazsa yerlesik fonta otomatik geri donus
 
 ## Neden raylib?

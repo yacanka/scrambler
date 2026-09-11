@@ -131,9 +131,11 @@ static float render_scale(void) {
 
 int app_run(int argc, char *argv[]) {
     AppState state = {0};
+    process_startup_paths(&state, argc, argv);
+    if (argc > 1) return 0;
+
     Font font = load_ui_font();
     if (IsFontValid(font)) ui_set_font(font);
-    process_startup_paths(&state, argc, argv);
 
     while (!WindowShouldClose()) {
         process_dropped_paths(&state);

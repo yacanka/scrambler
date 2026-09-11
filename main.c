@@ -46,8 +46,9 @@
  *
  * Ozetle: hem "programin uzerine surukle" (argv araciligiyla) hem de
  * "calisan konsol penceresinin icine surukle" (stdin araciligiyla)
- * desteklenir - boylece her uc platformda da pratik bir surukle-birak
- * deneyimi saglanir.
+ * desteklenir. argv ile baslatilan program verilen dosyalari isleyip
+ * kapanir; argumansiz baslatilan program stdin uzerinden yeni yollar
+ * beklemeye devam eder.
  */
 
 #include <stdio.h>
@@ -367,12 +368,12 @@ int main(int argc, char *argv[]) {
             process_and_report(argv[i]);
             printf("\n");
         }
-        printf("Baska bir dosya islemek icin, yolunu asagidaki satira\n");
-        printf("surukleyip birakabilir ya da yazip Enter'a basabilirsiniz.\n");
-    } else {
-        printf("Islenecek dosyanin yolunu bu pencereye surukleyip birakin\n");
-        printf("(veya elle yazin), sonra Enter'a basin.\n");
+        printf("Cikiliyor.\n");
+        return 0;
     }
+
+    printf("Islenecek dosyanin yolunu bu pencereye surukleyip birakin\n");
+    printf("(veya elle yazin), sonra Enter'a basin.\n");
     printf("Cikmak icin bos satirda Enter'a basin.\n\n");
 
     char line[2048];
