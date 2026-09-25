@@ -1,14 +1,14 @@
 /*
- * ZIP Baslik Araci - Konsol surumu (tek dosya, bagimsizlik yok)
+ * Scrambler - Konsol surumu (tek dosya, harici bagimlilik yok)
  * Windows / Linux / macOS
  * ---------------------------------------------------------------
- * Bu tek main.c dosyasi, sadece standart C kutuphanesini (C99)
- * kullanir. Hicbir dis kutuphaneye (SDL2 vb.) ihtiyac duymaz; ekstra
+ * Bu tek main.c dosyasi C99 ve sistemin saat/terminal API'lerini
+ * kullanir. Hicbir dis kutuphaneye ihtiyac duymaz; ekstra
  * kurulum yapmadan herhangi bir C derleyicisiyle derlenebilir:
  *
  *   gcc -O2 -o zip_header_tool main.c          (Linux/macOS, gcc)
  *   clang -O2 -o zip_header_tool main.c        (macOS, clang)
- *   cl /O2 main.c                              (Windows, MSVC)
+ *   cl /O2 /utf-8 main.c                       (Windows, MSVC)
  *   gcc -O2 -o zip_header_tool.exe main.c      (Windows, MinGW)
  *
  * NE YAPAR
@@ -51,9 +51,142 @@
  * beklemeye devam eder.
  */
 
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#define _FILE_OFFSET_BITS 64
+#endif
+
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
+#ifdef _WIN32
+#include <io.h>
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
+typedef struct {
+    int64_t total;
+    unsigned long long completed;
+    double started_at;
+    double last_update;
+    int terminal;
+} Progress;
+
+/* Windows long is 32 bits even in a 64-bit build. */
+static int stream_seek(FILE *stream, int64_t offset, int origin) {
+#ifdef _WIN32
+    return _fseeki64(stream, offset, origin);
+#else
+    return fseeko(stream, (off_t)offset, origin);
+#endif
+}
+
+static int64_t stream_position(FILE *stream) {
+#ifdef _WIN32
+    return _ftelli64(stream);
+#else
+    return (int64_t)ftello(stream);
+#endif
+}
+
+static double monotonic_seconds(void) {
+#ifdef _WIN32
+    LARGE_INTEGER counter, frequency;
+    if (!QueryPerformanceFrequency(&frequency) ||
+        !QueryPerformanceCounter(&counter)) return 0.0;
+    return (double)counter.QuadPart / (double)frequency.QuadPart;
+#else
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0.0;
+    return (double)now.tv_sec + (double)now.tv_nsec / 1000000000.0;
+#endif
+}
+
+static int stdout_is_terminal(void) {
+#ifdef _WIN32
+    return _isatty(_fileno(stdout));
+#else
+    return isatty(fileno(stdout));
+#endif
+}
+
+static void progress_amounts(const Progress *progress, char *text,
+                             size_t capacity) {
+    static const char *units[] = {"B", "KB", "MB", "GB", "TB", "PB", "EB"};
+    double total = (double)progress->total;
+    double completed = (double)progress->completed;
+    size_t unit = 0;
+    while (total >= 1000.0 && unit + 1 < sizeof(units) / sizeof(units[0])) {
+        total /= 1000.0;
+        completed /= 1000.0;
+        unit++;
+    }
+    int precision = unit == 0 ? 0 : 1;
+    snprintf(text, capacity, "%.*f / %.*f %s", precision, completed,
+             precision, total, units[unit]);
+}
+
+static void progress_draw(const Progress *progress, int finished) {
+    double fraction = progress->total > 0
+        ? (double)progress->completed / (double)progress->total : 0.0;
+    if (fraction > 1.0) fraction = 1.0;
+    int percent = finished ? 100 : (int)(fraction * 100.0);
+    /* 100% means the output was successfully flushed and closed. */
+    if (!finished && percent > 99) percent = 99;
+
+    char remaining[32] = "--";
+    double elapsed = monotonic_seconds() - progress->started_at;
+    if (finished) {
+        snprintf(remaining, sizeof(remaining), "0 sn");
+    } else if (progress->completed > 0 && elapsed >= 0.1 && fraction > 0.0) {
+        double seconds = elapsed * (1.0 - fraction) / fraction;
+        /* Do not promise zero seconds before the output is closed. */
+        snprintf(remaining, sizeof(remaining), "~%.0f sn",
+                 seconds < 1.0 ? 1.0 : seconds);
+    }
+
+    char amounts[64];
+    progress_amounts(progress, amounts, sizeof(amounts));
+    printf("%s  [", progress->terminal ? "\r" : "");
+    for (int i = 0; i < 20; i++) {
+        printf("%s", i < percent / 5 ? "█" : "░");
+    }
+    printf("] %%%-3d  %-19s  Tahmini kalan: %-10s",
+           percent, amounts, remaining);
+    if (!progress->terminal || finished) putchar('\n');
+    fflush(stdout);
+}
+
+static Progress progress_start(int64_t total) {
+    Progress progress = {0};
+    progress.total = total;
+    progress.started_at = monotonic_seconds();
+    progress.last_update = progress.started_at;
+    progress.terminal = stdout_is_terminal();
+    printf("  Dosya işleniyor…\n\n");
+    progress_draw(&progress, 0);
+    return progress;
+}
+
+static void progress_advance(Progress *progress) {
+    progress->completed++;
+    /* Check time once per 64 KiB, and redraw at most ten times a second. */
+    if (!progress->terminal || progress->completed % 65536 != 0) return;
+    double now = monotonic_seconds();
+    if (now - progress->last_update < 0.1) return;
+    progress_draw(progress, 0);
+    progress->last_update = now;
+}
+
+static void progress_finish(const Progress *progress, int success) {
+    if (success) progress_draw(progress, 1);
+    else if (progress->terminal) putchar('\n');
+}
 
 /* ============================================================ */
 /*  ZIP tespiti ve bit-kaydirma tabanli bozma/geri getirme       */
@@ -133,12 +266,22 @@ static int rotate_stream_left(const char *input_path, const char *output_path,
                                int shift) {
     FILE *in = fopen(input_path, "rb");
     if (!in) return -1;
+    if (stream_seek(in, 0, SEEK_END) != 0) {
+        fclose(in);
+        return -1;
+    }
+    int64_t size = stream_position(in);
+    if (size < 0 || stream_seek(in, 0, SEEK_SET) != 0) {
+        fclose(in);
+        return -1;
+    }
     FILE *out = fopen(output_path, "wb");
     if (!out) {
         fclose(in);
         return -1;
     }
 
+    Progress progress = progress_start(size);
     int ok = 1;
     int first_int = fgetc(in);
 
@@ -156,6 +299,7 @@ static int rotate_stream_left(const char *input_path, const char *output_path,
                 break;
             }
             current = next;
+            progress_advance(&progress);
         }
 
         if (ok) {
@@ -165,6 +309,8 @@ static int rotate_stream_left(const char *input_path, const char *output_path,
                 (current << shift) | (first_byte >> (8 - shift)));
             if (fputc(out_byte, out) == EOF) {
                 ok = 0;
+            } else {
+                progress_advance(&progress);
             }
         }
     }
@@ -173,6 +319,7 @@ static int rotate_stream_left(const char *input_path, const char *output_path,
     fclose(in);
     if (fclose(out) != 0) ok = 0;
     if (!ok) remove(output_path);
+    progress_finish(&progress, ok);
     return ok ? 0 : -1;
 }
 
@@ -187,11 +334,11 @@ static int rotate_stream_right(const char *input_path,
     FILE *in = fopen(input_path, "rb");
     if (!in) return -1;
 
-    if (fseek(in, 0, SEEK_END) != 0) {
+    if (stream_seek(in, 0, SEEK_END) != 0) {
         fclose(in);
         return -1;
     }
-    long size = ftell(in);
+    int64_t size = stream_position(in);
     if (size < 0) {
         fclose(in);
         return -1;
@@ -203,10 +350,11 @@ static int rotate_stream_right(const char *input_path,
         return -1;
     }
 
+    Progress progress = progress_start(size);
     int ok = 1;
 
     if (size > 0) {
-        if (fseek(in, -1, SEEK_END) != 0) {
+        if (stream_seek(in, -1, SEEK_END) != 0) {
             ok = 0;
         }
         int last_int = ok ? fgetc(in) : EOF;
@@ -215,7 +363,7 @@ static int rotate_stream_right(const char *input_path,
         }
         unsigned char prev = (unsigned char)last_int;
 
-        if (ok && fseek(in, 0, SEEK_SET) != 0) {
+        if (ok && stream_seek(in, 0, SEEK_SET) != 0) {
             ok = 0;
         }
 
@@ -229,6 +377,7 @@ static int rotate_stream_right(const char *input_path,
                 break;
             }
             prev = current;
+            progress_advance(&progress);
         }
         if (ferror(in)) ok = 0;
     }
@@ -236,6 +385,7 @@ static int rotate_stream_right(const char *input_path,
     fclose(in);
     if (fclose(out) != 0) ok = 0;
     if (!ok) remove(output_path);
+    progress_finish(&progress, ok);
     return ok ? 0 : -1;
 }
 
@@ -324,12 +474,10 @@ static void sanitize_path(char *s) {
 }
 
 static void print_banner(void) {
-    printf("========================================\n");
-    printf(" ZIP Baslik Araci - konsol surumu\n");
-    printf("========================================\n");
-    printf("Zip dosyasi        -> bitler kaydirilarak bozulur (_scrambled)\n");
-    printf("Taninmayan dosya   -> ters kaydirma ile zip geri getirilir (_restored)\n");
-    printf("Orijinal dosyaya dokunulmaz; sonuc her zaman yeni bir dosyadir.\n\n");
+    printf("\n  SCRAMBLER\n");
+    printf("  ────────────────────────────────────────\n");
+    printf("  Dosyalarını dönüştür, kolayca geri al.\n");
+    printf("  Orijinal korunur. Sonuç aynı klasöre kaydedilir.\n\n");
 }
 
 static void process_and_report(const char *raw_path) {
@@ -341,24 +489,26 @@ static void process_and_report(const char *raw_path) {
         return;
     }
 
+    const char *separator = find_last_separator(path);
+    printf("  Dosya: %s\n", separator ? separator + 1 : path);
+
     char output_path[2048];
     int was_zip = 0;
     if (process_file(path, output_path, sizeof(output_path), &was_zip) == 0) {
-        if (was_zip) {
-            printf("[OK]   %s\n       -> bitler kaydirilarak bozuldu\n       -> %s\n",
-                   path, output_path);
-        } else {
-            printf("[OK]   %s\n       -> ters kaydirma ile geri getirildi\n       -> %s\n",
-                   path, output_path);
-        }
+        printf("\n  Tamamlandı · %s\n  → %s\n",
+               was_zip ? "Dosya dönüştürüldü" : "Ters dönüşüm uygulandı",
+               output_path);
     } else {
-        printf("[HATA] %s islenemedi (dosya bulunamadi/acilamadi ya da "
-               "yazma izni yok).\n",
-               path);
+        printf("\n  [HATA] Dosya işlenemedi.\n");
+        printf("  Dosya yolunu ve okuma/yazma izinlerini kontrol edin.\n");
     }
 }
 
 int main(int argc, char *argv[]) {
+#ifdef _WIN32
+    UINT previous_code_page = GetConsoleOutputCP();
+    if (stdout_is_terminal()) SetConsoleOutputCP(CP_UTF8);
+#endif
     print_banner();
 
     if (argc > 1) {
@@ -368,17 +518,18 @@ int main(int argc, char *argv[]) {
             process_and_report(argv[i]);
             printf("\n");
         }
-        printf("Cikiliyor.\n");
+#ifdef _WIN32
+        if (previous_code_page) SetConsoleOutputCP(previous_code_page);
+#endif
         return 0;
     }
 
-    printf("Islenecek dosyanin yolunu bu pencereye surukleyip birakin\n");
-    printf("(veya elle yazin), sonra Enter'a basin.\n");
-    printf("Cikmak icin bos satirda Enter'a basin.\n\n");
+    printf("  Dosyayı sürükle veya yolunu yaz, Enter'a bas.\n");
+    printf("  Çıkmak için boş bırak ve Enter'a bas.\n\n");
 
     char line[2048];
     while (1) {
-        printf("> ");
+        printf("  Dosya > ");
         fflush(stdout);
         if (!fgets(line, sizeof(line), stdin)) {
             break;
@@ -395,6 +546,9 @@ int main(int argc, char *argv[]) {
         printf("\n");
     }
 
-    printf("Cikiliyor.\n");
+    printf("\n  Görüşmek üzere.\n\n");
+#ifdef _WIN32
+    if (previous_code_page) SetConsoleOutputCP(previous_code_page);
+#endif
     return 0;
 }

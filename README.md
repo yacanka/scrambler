@@ -67,6 +67,33 @@ scrambler/
 `scrambler_core` GUI'den bagimsizdir. Bu sayede dosya donusum testleri
 raylib indirilmeden de derlenebilir.
 
+## Konsol sürümü
+
+Kökteki `main.c`, harici bağımlılık gerektirmeyen ayrı konsol sürümüdür:
+
+```bash
+cc -std=c99 -O2 -Wall -Wextra -Wpedantic main.c -o scrambler
+./scrambler
+```
+
+Windows/MSVC ile: `cl /O2 /utf-8 main.c /Fe:scrambler.exe`.
+Dosyayı terminale sürükleyin veya yolunu yazıp Enter'a basın. Çıkmak
+için boş satırda Enter'a basın. Dosya yolları komut satırından da
+verilebilir: `./scrambler arsiv.zip`.
+
+İşlem sırasında `Dosya işleniyor…`, yüzdelik çubuk, işlenen/toplam veri
+ve tahmini kalan süre gösterilir. Süre, geçen gerçek zaman ve işlenen
+baytlardan hesaplanır; ilk ölçüme kadar `--` görünür. Çubuk saniyede en
+fazla 10 kez yenilenir. `%100`, çıktı başarıyla kapatıldığında gösterilir.
+Çıktı bir dosyaya yönlendirilirse yalnızca başlangıç ve sonuç ilerlemesi
+yazılır. Bu gösterge konsol sürümüne aittir.
+
+Konsol regresyon testleri (Python 3, ek paket gerektirmez):
+
+```bash
+python3 tests/test_console.py ./scrambler
+```
+
 ## GNU GCC ile adim adim build (Linux)
 
 ### 1. Build araclarini ve sistem kutuphanelerini kur
@@ -208,7 +235,9 @@ olusabilir.
 ## Sinirlar
 
 - Ayni cikti yolu zaten varsa mevcut cikti dosyasinin uzerine yazilir.
-- Donusum standart `fseek`/`ftell` kullandigi icin `long` tipinin 32 bit
-  oldugu platformlarda yaklasik 2 GB ve ustu dosyalar desteklenmeyebilir.
+- Masaustu surumunun donusum cekirdegi standart `fseek`/`ftell` kullandigi
+  icin `long` tipinin 32 bit oldugu platformlarda yaklasik 2 GB ve ustu
+  dosyalar desteklenmeyebilir. Konsol surumu 64 bit dosya konumlandirma
+  kullanir.
 - Dosya donusumu su anda senkrondur; cok buyuk dosyalarda islem boyunca
   pencere kisa sureli yanit vermeyebilir.
